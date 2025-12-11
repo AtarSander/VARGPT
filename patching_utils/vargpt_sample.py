@@ -120,7 +120,7 @@ def vargpt_sample(
 
     generation_end = False
     while self._has_unfinished_sequences(
-        this_peer_finished, synced_gpus, device=input_ids.device, cur_len=cur_len, max_length=max_length
+        this_peer_finished, synced_gpus, device=input_ids.device
     ) and not generation_end:
         # prepare model inputs
         model_inputs = self.prepare_inputs_for_generation(input_ids, **model_kwargs)
@@ -172,10 +172,12 @@ def vargpt_sample(
         # token selection
         if do_sample:
             probs = nn.functional.softmax(next_token_scores, dim=-1)
+            probs = probs[:, 0, :]
             # TODO (joao): this OP throws "skipping cudagraphs due to ['incompatible ops']", find solution
             next_tokens = torch.multinomial(probs, num_samples=1).squeeze(1)
         else:
             next_tokens = torch.argmax(next_token_scores, dim=-1)
+            next_tokens = next_tokens[:, 0]
 
 
         # finished sentences should have their next token be a padding token
@@ -183,6 +185,8 @@ def vargpt_sample(
             next_tokens = next_tokens * unfinished_sequences + pad_token_id * (1 - unfinished_sequences)
 
         if next_tokens.shape[0] == 1:
+            # if next_tokens[0] == 2:
+            #     next_tokens[0] = 32002
             if hasattr(self.config, 'special_tokens') and next_tokens[0] == self.config.special_tokens['image_gen_start_token_id']:
                 input_ids = torch.cat([input_ids, next_tokens[:, None]], dim=-1)
                 cur_len += 1
@@ -206,9 +210,11 @@ def vargpt_sample(
                 if do_sample:
                     probs = nn.functional.softmax(next_token_scores, dim=-1)
                     # TODO (joao): this OP throws "skipping cudagraphs due to ['incompatible ops']", find solution
+                    probs = probs[:, 0, :]
                     next_tokens = torch.multinomial(probs, num_samples=1).squeeze(1)
                 else:
                     next_tokens = torch.argmax(next_token_scores, dim=-1)
+                    next_tokens = next_tokens[:, 0]
 
 
                 del outputs
@@ -220,7 +226,6 @@ def vargpt_sample(
                 model_inputs.update({"output_attentions": output_attentions} if output_attentions else {})
                 model_inputs.update({"output_hidden_states": output_hidden_states} if output_hidden_states else {})
                 
-
                 # forward pass to get next token
                 outputs = self(**model_inputs, return_dict=True, inference_image_gen = True)
 

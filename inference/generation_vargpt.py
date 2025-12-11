@@ -4,18 +4,17 @@ from PIL import Image
 import torch
 from transformers import AutoProcessor, AutoTokenizer
 from vargpt_llava.modeling_vargpt_llava import VARGPTLlavaForConditionalGeneration
-from vargpt_llava.prepare_vargpt_llava import prepare_vargpt_llava
+from vargpt_llava.prepare_vargpt_llava import prepare_vargpt_llava 
 from vargpt_llava.processing_vargpt_llava import VARGPTLlavaProcessor
 from patching_utils.patching import patching
-
 model_id = "VARGPT-family/VARGPT_LLaVA-v1"
 
 prepare_vargpt_llava(model_id)
 
 model = VARGPTLlavaForConditionalGeneration.from_pretrained(
-    model_id,
-    torch_dtype=torch.float32,
-    low_cpu_mem_usage=True,
+    model_id, 
+    torch_dtype=torch.float32, 
+    low_cpu_mem_usage=True, 
 ).to(0)
 
 patching(model)
@@ -33,20 +32,20 @@ processor = VARGPTLlavaProcessor.from_pretrained(model_id)
 
 conversation = [
     {
-        "role": "user",
-        "content": [
-            {
-                "type": "text",
-                "text": "Please design a drawing of a butterfly on a flower.",
-            },
+      "role": "user",
+      "content": [
+          {"type": "text", "text": "Please create a rendered drawing of an old photo of an aircraft carrier in the water."},
         ],
     },
 ]
 prompt = processor.apply_chat_template(conversation, add_generation_prompt=True)
 print(prompt)
 
-inputs = processor(text=prompt, return_tensors="pt").to(0, torch.float32)
+inputs = processor(text=prompt, return_tensors='pt').to(0, torch.float32)
 model._IMAGE_GEN_PATH = "output.png"
-output = model.generate(**inputs, max_new_tokens=1000, do_sample=True)
+output = model.generate(
+    **inputs, 
+    max_new_tokens=2048, 
+    do_sample=True)
 
-print(processor.decode(output[0], skip_special_tokens=True))
+print(processor.decode(output[0], skip_special_tokens=False))
