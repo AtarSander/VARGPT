@@ -39,8 +39,16 @@ from transformers.utils import (
 )
 from transformers import AutoModel, AutoModelForCausalLM
 from .configuration_vargpt_llava import VARGPTLlavaConfig
-from vargpt_llava.var_model.models import VAR, VQVAE, build_vae_vargpt, build_vae_vargpt_v1
-from vargpt_llava.var_model.models.helpers import sample_with_top_k_top_p_, gumbel_softmax_with_rng
+from vargpt_llava.var_model.models import (
+    VAR,
+    VQVAE,
+    build_vae_vargpt,
+    build_vae_vargpt_v1,
+)
+from vargpt_llava.var_model.models.helpers import (
+    sample_with_top_k_top_p_,
+    gumbel_softmax_with_rng,
+)
 
 
 logger = logging.get_logger(__name__)
@@ -53,6 +61,7 @@ _CHECKPOINT_FOR_DOC = "VARGPT-family/VARGPT_LLaVA-v1"
 
 # image generation path
 _IMAGE_GEN_PATH = "image_generation_output.png"
+
 
 @dataclass
 class LlavaCausalLMOutputWithPast(ModelOutput):
@@ -98,9 +107,13 @@ class LlavaMultiModalProjector(nn.Module):
     def __init__(self, config: VARGPTLlavaConfig):
         super().__init__()
 
-        self.linear_1 = nn.Linear(config.vision_config.hidden_size, config.text_config.hidden_size, bias=True)
+        self.linear_1 = nn.Linear(
+            config.vision_config.hidden_size, config.text_config.hidden_size, bias=True
+        )
         self.act = ACT2FN[config.projector_hidden_act]
-        self.linear_2 = nn.Linear(config.text_config.hidden_size, config.text_config.hidden_size, bias=True)
+        self.linear_2 = nn.Linear(
+            config.text_config.hidden_size, config.text_config.hidden_size, bias=True
+        )
 
     def forward(self, image_features):
         hidden_states = self.linear_1(image_features)
@@ -130,7 +143,6 @@ LLAVA_START_DOCSTRING = r"""
     "The bare LLaMA Model outputting raw hidden-states without any specific head on top.",
     LLAVA_START_DOCSTRING,
 )
-
 class GenPatchMerger(nn.Module):
     def __init__(self, dim: int, image_gen_dim: int = 1024) -> None:
         super().__init__()
@@ -145,7 +157,7 @@ class GenPatchMerger(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self.mlp(x.view(-1, self.hidden_size))
         return x
-    
+
 
 class LlavaPreTrainedModel(PreTrainedModel):
     config_class = VARGPTLlavaConfig
@@ -267,16 +279,22 @@ class VARGPTLlavaForConditionalGeneration(LlavaPreTrainedModel, GenerationMixin)
         self.multi_modal_projector = LlavaMultiModalProjector(config)
         self.vocab_size = config.text_config.vocab_size
         self.language_model = AutoModelForCausalLM.from_config(config.text_config)
-        self.pad_token_id = self.config.pad_token_id if self.config.pad_token_id is not None else -1
-        
+        self.pad_token_id = (
+            self.config.pad_token_id if self.config.pad_token_id is not None else -1
+        )
+
         # VAR ---------------------------------
-        self.var_config=  {}
-        self.var_config['patch_nums'] = (1, 2, 3, 4, 5, 6, 8, 10, 13, 16)
-        
+        self.var_config = {}
+        self.var_config["patch_nums"] = (1, 2, 3, 4, 5, 6, 8, 10, 13, 16)
+
         # v0.1
         # self.vae_local, self.vargpt_gen = build_vae_vargpt(self.language_model.dtype, num_classes=self.config.special_tokens['image_gen_start_token_id'] +1, embed_dim = config.hidden_size, logit_dim=config.hidden_size)
         # v1.0
-        self.vae_local, self.vargpt_gen = build_vae_vargpt_v1(self.language_model.dtype, num_classes=self.config.special_tokens['image_gen_start_token_id'] +1, depth=30)
+        self.vae_local, self.vargpt_gen = build_vae_vargpt_v1(
+            self.language_model.dtype,
+            num_classes=self.config.special_tokens["image_gen_start_token_id"] + 1,
+            depth=30,
+        )
 
         self.version = 1.0
 
@@ -284,10 +302,10 @@ class VARGPTLlavaForConditionalGeneration(LlavaPreTrainedModel, GenerationMixin)
         self._IMAGE_GEN_PATH = _IMAGE_GEN_PATH
 
         self.image_gen_projector = GenPatchMerger(
-            dim=config.hidden_size, image_gen_dim=self.vargpt_gen.C 
+            dim=config.hidden_size, image_gen_dim=self.vargpt_gen.C
         )
         self.image_gen_projector_out = GenPatchMerger(
-            dim=self.vargpt_gen.C, image_gen_dim=config.hidden_size 
+            dim=self.vargpt_gen.C, image_gen_dim=config.hidden_size
         )
 
         self.post_init()
@@ -295,8 +313,10 @@ class VARGPTLlavaForConditionalGeneration(LlavaPreTrainedModel, GenerationMixin)
     def get_vae_gt_xin(self, inp_B3HW):
         gt_idx_Bl = self.vae_local.img_to_idxBl(inp_B3HW)
         gt_BL = torch.cat(gt_idx_Bl, dim=1)
-        x_BLCv_wo_first_l = self.vae_local.quantize.idxBl_to_var_input(gt_idx_Bl, input_dtype=inp_B3HW.dtype)
-        
+        x_BLCv_wo_first_l = self.vae_local.quantize.idxBl_to_var_input(
+            gt_idx_Bl, input_dtype=inp_B3HW.dtype
+        )
+
         return gt_BL, x_BLCv_wo_first_l
 
     def get_input_embeddings(self):
@@ -320,15 +340,22 @@ class VARGPTLlavaForConditionalGeneration(LlavaPreTrainedModel, GenerationMixin)
     def tie_weights(self):
         return self.language_model.tie_weights()
 
-    def resize_token_embeddings(self, new_num_tokens: Optional[int] = None, pad_to_multiple_of=None) -> nn.Embedding:
-        model_embeds = self.language_model.resize_token_embeddings(new_num_tokens, pad_to_multiple_of)
+    def resize_token_embeddings(
+        self, new_num_tokens: Optional[int] = None, pad_to_multiple_of=None
+    ) -> nn.Embedding:
+        model_embeds = self.language_model.resize_token_embeddings(
+            new_num_tokens, pad_to_multiple_of
+        )
         # update vocab size
         self.config.text_config.vocab_size = model_embeds.num_embeddings
         self.vocab_size = model_embeds.num_embeddings
         return model_embeds
 
     def get_image_features(
-        self, pixel_values: torch.FloatTensor, vision_feature_layer: int, vision_feature_select_strategy: str
+        self,
+        pixel_values: torch.FloatTensor,
+        vision_feature_layer: int,
+        vision_feature_select_strategy: str,
     ):
         """
         Obtains image last hidden states from the vision tower and apply multimodal projection.
@@ -352,27 +379,40 @@ class VARGPTLlavaForConditionalGeneration(LlavaPreTrainedModel, GenerationMixin)
         elif vision_feature_select_strategy == "full":
             selected_image_feature = selected_image_feature
         else:
-            raise ValueError(f"Unexpected select feature strategy: {self.config.vision_feature_select_strategy}")
+            raise ValueError(
+                f"Unexpected select feature strategy: {self.config.vision_feature_select_strategy}"
+            )
         image_features = self.multi_modal_projector(selected_image_feature)
         return image_features
 
-    def _merge_input_ids_with_image_features(self, image_features, inputs_embeds, input_ids, attention_mask, labels):
+    def _merge_input_ids_with_image_features(
+        self, image_features, inputs_embeds, input_ids, attention_mask, labels
+    ):
         num_images, num_image_patches, embed_dim = image_features.shape
         batch_size, sequence_length = input_ids.shape
-        left_padding = not torch.sum(input_ids[:, -1] == torch.tensor(self.pad_token_id))
+        left_padding = not torch.sum(
+            input_ids[:, -1] == torch.tensor(self.pad_token_id)
+        )
         # 1. Create a mask to know where special image tokens are
         special_image_token_mask = input_ids == self.config.image_token_index
         num_special_image_tokens = torch.sum(special_image_token_mask, dim=-1)
         # Compute the maximum embed dimension
-        max_embed_dim = (num_special_image_tokens.max() * (num_image_patches - 1)) + sequence_length
-        batch_indices, non_image_indices = torch.where(input_ids != self.config.image_token_index)
+        max_embed_dim = (
+            num_special_image_tokens.max() * (num_image_patches - 1)
+        ) + sequence_length
+        batch_indices, non_image_indices = torch.where(
+            input_ids != self.config.image_token_index
+        )
 
         # 2. Compute the positions where text should be written
         # Calculate new positions for text tokens in merged image-text sequence.
         # `special_image_token_mask` identifies image tokens. Each image token will be replaced by `nb_text_tokens_per_images - 1` text tokens.
         # `torch.cumsum` computes how each image token shifts subsequent text token positions.
         # - 1 to adjust for zero-based indexing, as `cumsum` inherently increases indices by one.
-        new_token_positions = torch.cumsum((special_image_token_mask * (num_image_patches - 1) + 1), -1) - 1
+        new_token_positions = (
+            torch.cumsum((special_image_token_mask * (num_image_patches - 1) + 1), -1)
+            - 1
+        )
         nb_image_pad = max_embed_dim - 1 - new_token_positions[:, -1]
         if left_padding:
             new_token_positions += nb_image_pad[:, None]  # offset for left padding
@@ -380,14 +420,24 @@ class VARGPTLlavaForConditionalGeneration(LlavaPreTrainedModel, GenerationMixin)
 
         # 3. Create the full embedding, already padded to the maximum position
         final_embedding = torch.zeros(
-            batch_size, max_embed_dim, embed_dim, dtype=inputs_embeds.dtype, device=inputs_embeds.device
+            batch_size,
+            max_embed_dim,
+            embed_dim,
+            dtype=inputs_embeds.dtype,
+            device=inputs_embeds.device,
         )
         final_attention_mask = torch.zeros(
-            batch_size, max_embed_dim, dtype=attention_mask.dtype, device=inputs_embeds.device
+            batch_size,
+            max_embed_dim,
+            dtype=attention_mask.dtype,
+            device=inputs_embeds.device,
         )
         if labels is not None:
             final_labels = torch.full(
-                (batch_size, max_embed_dim), self.config.ignore_index, dtype=input_ids.dtype, device=input_ids.device
+                (batch_size, max_embed_dim),
+                self.config.ignore_index,
+                dtype=input_ids.dtype,
+                device=input_ids.device,
             )
         # In case the Vision model or the Language model has been offloaded to CPU, we need to manually
         # set the corresponding tensors into their correct target device.
@@ -401,17 +451,28 @@ class VARGPTLlavaForConditionalGeneration(LlavaPreTrainedModel, GenerationMixin)
 
         # 4. Fill the embeddings based on the mask. If we have ["hey" "<image>", "how", "are"]
         # we need to index copy on [0, 577, 578, 579] for the text and [1:576] for the image features
-        final_embedding[batch_indices, text_to_overwrite] = inputs_embeds[batch_indices, non_image_indices]
-        final_attention_mask[batch_indices, text_to_overwrite] = attention_mask[batch_indices, non_image_indices]
+        final_embedding[batch_indices, text_to_overwrite] = inputs_embeds[
+            batch_indices, non_image_indices
+        ]
+        final_attention_mask[batch_indices, text_to_overwrite] = attention_mask[
+            batch_indices, non_image_indices
+        ]
         if labels is not None:
-            final_labels[batch_indices, text_to_overwrite] = labels[batch_indices, non_image_indices]
+            final_labels[batch_indices, text_to_overwrite] = labels[
+                batch_indices, non_image_indices
+            ]
 
         # 5. Fill the embeddings corresponding to the images. Anything that is not `text_positions` needs filling (#29835)
         image_to_overwrite = torch.full(
-            (batch_size, max_embed_dim), True, dtype=torch.bool, device=inputs_embeds.device
+            (batch_size, max_embed_dim),
+            True,
+            dtype=torch.bool,
+            device=inputs_embeds.device,
         )
         image_to_overwrite[batch_indices, text_to_overwrite] = False
-        image_to_overwrite &= image_to_overwrite.cumsum(-1) - 1 >= nb_image_pad[:, None].to(target_device)
+        image_to_overwrite &= image_to_overwrite.cumsum(-1) - 1 >= nb_image_pad[
+            :, None
+        ].to(target_device)
 
         if image_to_overwrite.sum() != image_features.shape[:-1].numel():
             raise ValueError(
@@ -419,9 +480,13 @@ class VARGPTLlavaForConditionalGeneration(LlavaPreTrainedModel, GenerationMixin)
                 f" the number of image given to the model is {num_images}. This prevents correct indexing and breaks batch generation."
             )
 
-        final_embedding[image_to_overwrite] = image_features.contiguous().reshape(-1, embed_dim).to(target_device)
+        final_embedding[image_to_overwrite] = (
+            image_features.contiguous().reshape(-1, embed_dim).to(target_device)
+        )
         final_attention_mask |= image_to_overwrite
-        position_ids = (final_attention_mask.cumsum(-1) - 1).masked_fill_((final_attention_mask == 0), 1)
+        position_ids = (final_attention_mask.cumsum(-1) - 1).masked_fill_(
+            (final_attention_mask == 0), 1
+        )
 
         # 6. Mask out the embedding at padding positions, as we later use the past_key_value value to determine the non-attended tokens.
         batch_indices, pad_indices = torch.where(input_ids == self.pad_token_id)
@@ -434,8 +499,6 @@ class VARGPTLlavaForConditionalGeneration(LlavaPreTrainedModel, GenerationMixin)
 
         return final_embedding, final_attention_mask, final_labels, position_ids
 
-
-
     def process_image_gen_tokens_vargpt_v1(
         self,
         hidden_states: torch.Tensor,
@@ -443,32 +506,32 @@ class VARGPTLlavaForConditionalGeneration(LlavaPreTrainedModel, GenerationMixin)
         gt_BL: torch.Tensor,
         cond_BD: torch.Tensor,
         image_gen_num: int,
-        logits: torch.Tensor
+        logits: torch.Tensor,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
 
-
-        image_gen_mask = (input_ids == self.config.special_tokens['image_gen_pad_token_id'])
+        image_gen_mask = (
+            input_ids == self.config.special_tokens["image_gen_pad_token_id"]
+        )
 
         if image_gen_num != 0:
-            image_gen_hidden_states = hidden_states[image_gen_mask.unsqueeze(-1).expand_as(hidden_states)].view(
-                image_gen_num, -1, hidden_states.size(-1)
-            )
+            image_gen_hidden_states = hidden_states[
+                image_gen_mask.unsqueeze(-1).expand_as(hidden_states)
+            ].view(image_gen_num, -1, hidden_states.size(-1))
         else:
             image_gen_hidden_states = None
-
 
         image_gen_gt_BL = gt_BL
 
         other_logits = logits
         other_labels = input_ids.clone()
-        other_labels[image_gen_mask] = -100  
+        other_labels[image_gen_mask] = -100
 
         return other_logits, other_labels, image_gen_hidden_states, image_gen_gt_BL
 
-
-
     @add_start_docstrings_to_model_forward(LLAVA_INPUTS_DOCSTRING)
-    @replace_return_docstrings(output_type=LlavaCausalLMOutputWithPast, config_class=_CONFIG_FOR_DOC)
+    @replace_return_docstrings(
+        output_type=LlavaCausalLMOutputWithPast, config_class=_CONFIG_FOR_DOC
+    )
     def forward(
         self,
         input_ids: torch.LongTensor = None,
@@ -526,24 +589,43 @@ class VARGPTLlavaForConditionalGeneration(LlavaPreTrainedModel, GenerationMixin)
         "USER:  \nWhat's the content of the image? ASSISTANT: ..."
         ```"""
 
-        x_BLC, attn_bias, cond_BD_or_gss, cond_BD  = None, None, None, None
+        x_BLC, attn_bias, cond_BD_or_gss, cond_BD = None, None, None, None
         image_gen_length = 0
-        if pixel_gen_values is not None and not any(x is None for x in pixel_gen_values):
-            gt_BL, x_BLCv_wo_first_l = self.get_vae_gt_xin(pixel_gen_values) # torch.Size([1, 680]), torch.Size([1, 679, 32])
-            label_image_gen_start  = torch.LongTensor([self.config.special_tokens['image_gen_start_token_id']]).to(input_ids.device)
-            label_image_gen_start = label_image_gen_start.repeat(gt_BL.shape[0])  # 扩展为 (B,)
-            x_BLC, attn_bias, cond_BD_or_gss, cond_BD = self.vargpt_gen(label_image_gen_start, x_BLCv_wo_first_l) # torch.Size([1, 680, 1024]),torch.Size([1, 1024]) = cond_BD = SOS,  torch.Size([1, 1, 680, 680]) 
+        if pixel_gen_values is not None and not any(
+            x is None for x in pixel_gen_values
+        ):
+            gt_BL, x_BLCv_wo_first_l = self.get_vae_gt_xin(
+                pixel_gen_values
+            )  # torch.Size([1, 680]), torch.Size([1, 679, 32])
+            label_image_gen_start = torch.LongTensor(
+                [self.config.special_tokens["image_gen_start_token_id"]]
+            ).to(input_ids.device)
+            label_image_gen_start = label_image_gen_start.repeat(
+                gt_BL.shape[0]
+            )  # 扩展为 (B,)
+            x_BLC, attn_bias, cond_BD_or_gss, cond_BD = self.vargpt_gen(
+                label_image_gen_start, x_BLCv_wo_first_l
+            )  # torch.Size([1, 680, 1024]),torch.Size([1, 1024]) = cond_BD = SOS,  torch.Size([1, 1, 680, 680])
             image_gen_length = x_BLC.shape[1]
             x_SH = self.image_gen_projector(x_BLC).view(-1, self.config.hidden_size)
-        
 
-        output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
-        output_hidden_states = (
-            output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
+        output_attentions = (
+            output_attentions
+            if output_attentions is not None
+            else self.config.output_attentions
         )
-        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+        output_hidden_states = (
+            output_hidden_states
+            if output_hidden_states is not None
+            else self.config.output_hidden_states
+        )
+        return_dict = (
+            return_dict if return_dict is not None else self.config.use_return_dict
+        )
         vision_feature_layer = (
-            vision_feature_layer if vision_feature_layer is not None else self.config.vision_feature_layer
+            vision_feature_layer
+            if vision_feature_layer is not None
+            else self.config.vision_feature_layer
         )
         vision_feature_select_strategy = (
             vision_feature_select_strategy
@@ -552,7 +634,9 @@ class VARGPTLlavaForConditionalGeneration(LlavaPreTrainedModel, GenerationMixin)
         )
 
         if (input_ids is None) ^ (inputs_embeds is not None):
-            raise ValueError("You must specify exactly one of input_ids or inputs_embeds")
+            raise ValueError(
+                "You must specify exactly one of input_ids or inputs_embeds"
+            )
 
         if pixel_values is not None and inputs_embeds is not None:
             raise ValueError(
@@ -582,17 +666,23 @@ class VARGPTLlavaForConditionalGeneration(LlavaPreTrainedModel, GenerationMixin)
             )
             # prefill stage vs decoding stage (legacy behavior copied)
             if input_ids.shape[1] != 1:
-                inputs_embeds, attention_mask, labels, position_ids = self._merge_input_ids_with_image_features(
-                    image_features, inputs_embeds, input_ids, attention_mask, labels
+                inputs_embeds, attention_mask, labels, position_ids = (
+                    self._merge_input_ids_with_image_features(
+                        image_features, inputs_embeds, input_ids, attention_mask, labels
+                    )
                 )
-                cache_position = torch.arange(attention_mask.shape[1], device=attention_mask.device)
+                cache_position = torch.arange(
+                    attention_mask.shape[1], device=attention_mask.device
+                )
             else:
                 # Retrieve the first layer to inspect the logits and mask out the hidden states
                 # that are set to 0
                 first_layer_past_key_value = past_key_values[0][0][:, :, :, 0]
 
                 # Sum all dimensions of head_dim (-2) to avoid random errors such as: https://github.com/huggingface/transformers/pull/28032#issuecomment-1863691941
-                batch_index, non_attended_tokens = torch.where(first_layer_past_key_value.float().sum(-2) == 0)
+                batch_index, non_attended_tokens = torch.where(
+                    first_layer_past_key_value.float().sum(-2) == 0
+                )
 
                 # Get the target length
                 target_length = input_ids.shape[1]
@@ -614,15 +704,19 @@ class VARGPTLlavaForConditionalGeneration(LlavaPreTrainedModel, GenerationMixin)
                 # Zero-out the places where we don't need to attend
                 extended_attention_mask[new_batch_index, new_non_attended_tokens] = 0
 
-                attention_mask = torch.cat((extended_attention_mask, attention_mask[:, -target_length:]), dim=1)
+                attention_mask = torch.cat(
+                    (extended_attention_mask, attention_mask[:, -target_length:]), dim=1
+                )
                 position_ids = torch.sum(attention_mask, dim=1).unsqueeze(-1) - 1
-                cache_position = torch.arange(attention_mask.shape[1], device=attention_mask.device)[-target_length:]
+                cache_position = torch.arange(
+                    attention_mask.shape[1], device=attention_mask.device
+                )[-target_length:]
 
         # TODO: @raushan retain only the new behavior after v4.47
         elif image_features is not None:
             n_image_tokens = (input_ids == self.config.image_token_index).sum().item()
             image_features = image_features.view(-1, image_features.shape[-1])
-            n_image_features = image_features.shape[0] 
+            n_image_features = image_features.shape[0]
             if n_image_tokens != n_image_features:
                 raise ValueError(
                     f"Image features and image tokens do not match: tokens: {n_image_tokens}, features {n_image_features}"
@@ -633,65 +727,115 @@ class VARGPTLlavaForConditionalGeneration(LlavaPreTrainedModel, GenerationMixin)
                 .expand_as(inputs_embeds)
                 .to(inputs_embeds.device)
             )
-            image_features = image_features.to(inputs_embeds.device, inputs_embeds.dtype)
-            inputs_embeds = inputs_embeds.masked_scatter(special_image_mask, image_features)
+            image_features = image_features.to(
+                inputs_embeds.device, inputs_embeds.dtype
+            )
+            inputs_embeds = inputs_embeds.masked_scatter(
+                special_image_mask, image_features
+            )
         elif pixel_gen_values is not None and self.training:
-            n_image_gen_tokens = (input_ids == self.config.special_tokens['image_gen_pad_token_id']).sum().item()
+            n_image_gen_tokens = (
+                (input_ids == self.config.special_tokens["image_gen_pad_token_id"])
+                .sum()
+                .item()
+            )
             n_image_gen_features = x_SH.shape[0]
             if n_image_gen_tokens != n_image_gen_features:
                 raise ValueError(
                     f"Gen Image features and image tokens do not match: tokens: {n_image_gen_tokens}, features {n_image_gen_features}"
                 )
             image_gen_mask = (
-                (input_ids == self.config.special_tokens['image_gen_pad_token_id'])
+                (input_ids == self.config.special_tokens["image_gen_pad_token_id"])
                 .unsqueeze(-1)
                 .expand_as(inputs_embeds)
                 .to(inputs_embeds.device)
             )
             image_gen_embeds = x_SH.to(inputs_embeds.device, inputs_embeds.dtype)
-            inputs_embeds = inputs_embeds.masked_scatter(image_gen_mask, image_gen_embeds)
+            inputs_embeds = inputs_embeds.masked_scatter(
+                image_gen_mask, image_gen_embeds
+            )
 
         if pixel_gen_values is not None and self.training:
             start_idx = []
             for i in range(input_ids.shape[0]):
-                indices = torch.where(input_ids[i] == self.config.special_tokens['image_gen_start_token_id'])[0]  # 找到特殊 token 的索引
+                indices = torch.where(
+                    input_ids[i]
+                    == self.config.special_tokens["image_gen_start_token_id"]
+                )[
+                    0
+                ]  # 找到特殊 token 的索引
                 if len(indices) > 0:
-                    start_idx.append(indices)  
+                    start_idx.append(indices)
                 else:
-                    start_idx.append(-1)  
+                    start_idx.append(-1)
 
             gen_image_config = {
                 "gen_attn_mask": attn_bias,
                 "image_gen_length": image_gen_length,
-                "start_idx": start_idx
+                "start_idx": start_idx,
             }
         else:
             gen_image_config = None
 
         if inference_image_gen:
             B = input_ids.shape[0]
-            assert B==1, "batch size must be 1 for inference"
+            assert B == 1, "batch size must be 1 for inference"
             # sos = cond_BD = self.vargpt_gen.class_emb(torch.cat((input_ids[0], torch.full_like(input_ids[0], fill_value=self.config.special_tokens['image_gen_start_token_id'] +1)), dim=0)) # torch.Size([2, 1, 3584])
-            sos = cond_BD = self.vargpt_gen.class_emb(torch.cat((torch.full_like(input_ids[0], fill_value=self.config.special_tokens['image_gen_start_token_id'] +1), torch.full_like(input_ids[0], fill_value=self.config.special_tokens['image_gen_start_token_id'] +1)), dim=0)) # torch.Size([2, 1, 3584])
-            lvl_pos = self.vargpt_gen.lvl_embed(self.vargpt_gen.lvl_1L) + self.vargpt_gen.pos_1LC
-            next_token_map = sos.unsqueeze(1).expand(2 * B, self.vargpt_gen.first_l, -1) + self.vargpt_gen.pos_start.expand(2 * B, self.vargpt_gen.first_l, -1) + lvl_pos[:, :self.vargpt_gen.first_l]
+            sos = cond_BD = self.vargpt_gen.class_emb(
+                torch.cat(
+                    (
+                        torch.full_like(
+                            input_ids[0],
+                            fill_value=self.config.special_tokens[
+                                "image_gen_start_token_id"
+                            ]
+                            + 1,
+                        ),
+                        torch.full_like(
+                            input_ids[0],
+                            fill_value=self.config.special_tokens[
+                                "image_gen_start_token_id"
+                            ]
+                            + 1,
+                        ),
+                    ),
+                    dim=0,
+                )
+            )  # torch.Size([2, 1, 3584])
+            lvl_pos = (
+                self.vargpt_gen.lvl_embed(self.vargpt_gen.lvl_1L)
+                + self.vargpt_gen.pos_1LC
+            )
+            next_token_map = (
+                sos.unsqueeze(1).expand(2 * B, self.vargpt_gen.first_l, -1)
+                + self.vargpt_gen.pos_start.expand(2 * B, self.vargpt_gen.first_l, -1)
+                + lvl_pos[:, : self.vargpt_gen.first_l]
+            )
             cur_L = 0
-            f_hat = sos.new_zeros(B, self.vargpt_gen.Cvae, self.vargpt_gen.patch_nums[-1], self.vargpt_gen.patch_nums[-1])
+            f_hat = sos.new_zeros(
+                B,
+                self.vargpt_gen.Cvae,
+                self.vargpt_gen.patch_nums[-1],
+                self.vargpt_gen.patch_nums[-1],
+            )
 
-            next_token_map = self.image_gen_projector(next_token_map).view(-1, next_token_map.shape[1], self.config.hidden_size)
+            next_token_map = self.image_gen_projector(next_token_map).view(
+                -1, next_token_map.shape[1], self.config.hidden_size
+            )
 
             top_k, top_p = 900, 0.96
             cfg = 1.5
             more_smooth = False
             self.vargpt_gen.set_kv_caching(True)
-            for si, pn in enumerate(self.vargpt_gen.patch_nums):   # si: i-th segment
+            for si, pn in enumerate(self.vargpt_gen.patch_nums):  # si: i-th segment
+                print(si)
                 ratio = si / self.vargpt_gen.num_stages_minus_1
-                cur_L += pn*pn
+                cur_L += pn * pn
                 cond_BD_or_gss = self.vargpt_gen.shared_ada_lin(cond_BD)
-                x = next_token_map[:B] # 
-               
+                x = next_token_map[:B]  #
+
                 outputs = self.language_model(
-                    attention_mask = None, 
+                    attention_mask=None,
                     position_ids=None,
                     past_key_values=past_key_values,
                     inputs_embeds=x,
@@ -705,38 +849,81 @@ class VARGPTLlavaForConditionalGeneration(LlavaPreTrainedModel, GenerationMixin)
 
                 hidden_states = outputs.hidden_states[-1]
                 # cfg
-                gaussian_noise = torch.randn(B, hidden_states.shape[1], hidden_states.shape[2], device=hidden_states.device, dtype=hidden_states.dtype)  # 保持设备一致
-                hidden_states = torch.cat([hidden_states, gaussian_noise], dim=0)  # [2*B, num, num2]
+                gaussian_noise = torch.randn(
+                    B,
+                    hidden_states.shape[1],
+                    hidden_states.shape[2],
+                    device=hidden_states.device,
+                    dtype=hidden_states.dtype,
+                )  # 保持设备一致
+                hidden_states = torch.cat(
+                    [hidden_states, gaussian_noise], dim=0
+                )  # [2*B, num, num2]
 
-                encoded_x = self.image_gen_projector_out(hidden_states).view(hidden_states.shape[0], hidden_states.shape[1], self.vargpt_gen.C)
-                logits_BlV = self.vargpt_gen.forward_inference(encoded_x, cond_BD_or_gss, cond_BD)
+                encoded_x = self.image_gen_projector_out(hidden_states).view(
+                    hidden_states.shape[0], hidden_states.shape[1], self.vargpt_gen.C
+                )
+                logits_BlV = self.vargpt_gen.forward_inference(
+                    encoded_x, cond_BD_or_gss, cond_BD
+                )
 
                 t = cfg * ratio
-                logits_BlV = (1+t) * logits_BlV[:B] - t * logits_BlV[B:]
-        
-                idx_Bl = sample_with_top_k_top_p_(logits_BlV, rng=None, top_k=top_k, top_p=top_p, num_samples=1)[:, :, 0]
-                if not more_smooth: # this is the default case
-                    h_BChw = self.vargpt_gen.vae_quant_proxy[0].embedding(idx_Bl)   # B, l, Cvae
-                else:   # not used when evaluating FID/IS/Precision/Recall
-                    gum_t = max(0.27 * (1 - ratio * 0.95), 0.005)   # refer to mask-git
-                    h_BChw = gumbel_softmax_with_rng(logits_BlV.mul(1 + ratio), tau=gum_t, hard=False, dim=-1, rng=None) @ self.vargpt_gen.vae_quant_proxy[0].embedding.weight.unsqueeze(0)
-                
-                h_BChw = h_BChw.transpose_(1, 2).reshape(B, self.vargpt_gen.Cvae, pn, pn)
-                f_hat, next_token_map = self.vargpt_gen.vae_quant_proxy[0].get_next_autoregressive_input(si, len(self.vargpt_gen.patch_nums), f_hat, h_BChw)
-                if si != self.vargpt_gen.num_stages_minus_1:   # prepare for next stage
-                    next_token_map = next_token_map.view(B, self.vargpt_gen.Cvae, -1).transpose(1, 2)
-                    next_token_map = self.vargpt_gen.word_embed(next_token_map) + lvl_pos[:, cur_L:cur_L + self.vargpt_gen.patch_nums[si+1] ** 2]
-                    next_token_map = self.image_gen_projector(next_token_map).view(-1, next_token_map.shape[1], self.config.hidden_size)
-                    next_token_map = next_token_map.repeat(2, 1, 1)   # double the batch sizes due to CFG
+                logits_BlV = (1 + t) * logits_BlV[:B] - t * logits_BlV[B:]
+
+                idx_Bl = sample_with_top_k_top_p_(
+                    logits_BlV, rng=None, top_k=top_k, top_p=top_p, num_samples=1
+                )[:, :, 0]
+                if not more_smooth:  # this is the default case
+                    h_BChw = self.vargpt_gen.vae_quant_proxy[0].embedding(
+                        idx_Bl
+                    )  # B, l, Cvae
+                else:  # not used when evaluating FID/IS/Precision/Recall
+                    gum_t = max(0.27 * (1 - ratio * 0.95), 0.005)  # refer to mask-git
+                    h_BChw = gumbel_softmax_with_rng(
+                        logits_BlV.mul(1 + ratio),
+                        tau=gum_t,
+                        hard=False,
+                        dim=-1,
+                        rng=None,
+                    ) @ self.vargpt_gen.vae_quant_proxy[0].embedding.weight.unsqueeze(0)
+
+                h_BChw = h_BChw.transpose_(1, 2).reshape(
+                    B, self.vargpt_gen.Cvae, pn, pn
+                )
+                f_hat, next_token_map = self.vargpt_gen.vae_quant_proxy[
+                    0
+                ].get_next_autoregressive_input(
+                    si, len(self.vargpt_gen.patch_nums), f_hat, h_BChw
+                )
+                if si != self.vargpt_gen.num_stages_minus_1:  # prepare for next stage
+                    next_token_map = next_token_map.view(
+                        B, self.vargpt_gen.Cvae, -1
+                    ).transpose(1, 2)
+                    next_token_map = (
+                        self.vargpt_gen.word_embed(next_token_map)
+                        + lvl_pos[
+                            :, cur_L : cur_L + self.vargpt_gen.patch_nums[si + 1] ** 2
+                        ]
+                    )
+                    next_token_map = self.image_gen_projector(next_token_map).view(
+                        -1, next_token_map.shape[1], self.config.hidden_size
+                    )
+                    next_token_map = next_token_map.repeat(
+                        2, 1, 1
+                    )  # double the batch sizes due to CFG
             self.vargpt_gen.set_kv_caching(False)
-            
-            recon_B3HW = self.vargpt_gen.vae_proxy[0].fhat_to_img(f_hat).add_(1).mul_(0.5)   # de-normalize, from [-1, 1] to [0, 1]
-            chw = torchvision.utils.make_grid(recon_B3HW, nrow=8, padding=0, pad_value=1.0)
+
+            recon_B3HW = (
+                self.vargpt_gen.vae_proxy[0].fhat_to_img(f_hat).add_(1).mul_(0.5)
+            )  # de-normalize, from [-1, 1] to [0, 1]
+            chw = torchvision.utils.make_grid(
+                recon_B3HW, nrow=8, padding=0, pad_value=1.0
+            )
             chw = chw.permute(1, 2, 0).mul_(255).cpu().numpy()
             chw = PImage.fromarray(chw.astype(np.uint8))
             chw.save(self._IMAGE_GEN_PATH)
 
-        else:    
+        else:
             outputs = self.language_model(
                 attention_mask=attention_mask,
                 position_ids=position_ids,
@@ -757,18 +944,26 @@ class VARGPTLlavaForConditionalGeneration(LlavaPreTrainedModel, GenerationMixin)
         gen_logits = None
         # TODO: adapted the var head on image gen token for v1.0 version
         if pixel_gen_values is not None and self.version == 1.0 and self.training:
-            other_logits, other_labels, image_gen_x_BLH, image_gen_labels = self.process_image_gen_tokens_vargpt_v1(
-                hidden_states=hidden_states,
-                input_ids=input_ids,
-                gt_BL=gt_BL,
-                cond_BD=cond_BD_or_gss,
-                image_gen_num=len(pixel_gen_values),
-                logits = logits
+            other_logits, other_labels, image_gen_x_BLH, image_gen_labels = (
+                self.process_image_gen_tokens_vargpt_v1(
+                    hidden_states=hidden_states,
+                    input_ids=input_ids,
+                    gt_BL=gt_BL,
+                    cond_BD=cond_BD_or_gss,
+                    image_gen_num=len(pixel_gen_values),
+                    logits=logits,
+                )
             )
 
-            image_gen_x_BLC = self.image_gen_projector_out(image_gen_x_BLH).view(image_gen_x_BLH.shape[0], image_gen_x_BLH.shape[1], -1)
-            image_gen_logits = self.vargpt_gen.forward_decoder(image_gen_x_BLC, attn_bias, cond_BD_or_gss, cond_BD)
-            loss = self.get_gen_loss(labels, other_logits, other_labels, image_gen_logits, image_gen_labels)
+            image_gen_x_BLC = self.image_gen_projector_out(image_gen_x_BLH).view(
+                image_gen_x_BLH.shape[0], image_gen_x_BLH.shape[1], -1
+            )
+            image_gen_logits = self.vargpt_gen.forward_decoder(
+                image_gen_x_BLC, attn_bias, cond_BD_or_gss, cond_BD
+            )
+            loss = self.get_gen_loss(
+                labels, other_logits, other_labels, image_gen_logits, image_gen_labels
+            )
 
             gen_logits = image_gen_logits
 
@@ -787,7 +982,6 @@ class VARGPTLlavaForConditionalGeneration(LlavaPreTrainedModel, GenerationMixin)
                 shift_labels = shift_labels.to(shift_logits.device)
                 loss = loss_fct(shift_logits, shift_labels)
 
-
         if not return_dict:
             output = (logits,) + outputs[1:]
             return (loss,) + output if loss is not None else output
@@ -800,7 +994,16 @@ class VARGPTLlavaForConditionalGeneration(LlavaPreTrainedModel, GenerationMixin)
             attentions=outputs.attentions,
             image_hidden_states=image_features if pixel_values is not None else None,
         )
-    def get_gen_loss(self, labels, other_logits, other_labels, image_gen_logits, image_gen_labels, image_gen_mask_list=None ):
+
+    def get_gen_loss(
+        self,
+        labels,
+        other_logits,
+        other_labels,
+        image_gen_logits,
+        image_gen_labels,
+        image_gen_mask_list=None,
+    ):
 
         loss = None
         if labels is not None:
@@ -815,7 +1018,9 @@ class VARGPTLlavaForConditionalGeneration(LlavaPreTrainedModel, GenerationMixin)
 
             if image_gen_logits is not None:
 
-                image_gen_logits = image_gen_logits.view(-1, image_gen_logits.size(-1)).float()  
+                image_gen_logits = image_gen_logits.view(
+                    -1, image_gen_logits.size(-1)
+                ).float()
                 image_gen_labels = image_gen_labels.view(-1)
                 image_gen_loss = loss_fct(image_gen_logits, image_gen_labels)
 
@@ -824,6 +1029,7 @@ class VARGPTLlavaForConditionalGeneration(LlavaPreTrainedModel, GenerationMixin)
                 loss = other_loss
 
         return loss
+
     def prepare_inputs_for_generation(
         self,
         input_ids,
